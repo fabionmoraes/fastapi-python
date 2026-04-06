@@ -172,13 +172,28 @@ Ou use **Swagger** em `/docs` para testar com um array colado.
 
 ---
 
-## Migrations (lembrete)
+## Migrations (Alembic)
 
-Gerar nova revisão a partir dos modelos (com banco acessível):
+Com `DATABASE_URL` apontando para o Postgres (mesmo valor da aplicação) e o banco acessível:
+
+1. **Gerar migration a partir dos modelos SQLAlchemy** (diff automático):
 
 ```bash
-python -m alembic revision --autogenerate -m "descricao"
+python -m alembic revision --autogenerate -m "descricao_curta"
+```
+
+Revise o arquivo criado em `alembic/versions/` antes de aplicar (autogenerate pode errar em índices, constraints, extensões, hypertables, etc.).
+
+2. **Aplicar migrations:**
+
+```bash
 python -m alembic upgrade head
+```
+
+3. **Migration vazia** (para escrever SQL/`op.*` manualmente):
+
+```bash
+python -m alembic revision -m "descricao_curta"
 ```
 
 ---
