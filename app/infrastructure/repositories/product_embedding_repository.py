@@ -35,6 +35,11 @@ class ProductEmbeddingRepository:
             )
         await self._session.flush()
 
+    async def get_by_product_id(self, product_id: UUID) -> ProductEmbeddingModel | None:
+        stmt = select(ProductEmbeddingModel).where(ProductEmbeddingModel.product_id == product_id)
+        res = await self._session.execute(stmt)
+        return res.scalar_one_or_none()
+
     async def search_similar(
         self,
         query_embedding: list[float],

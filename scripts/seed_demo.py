@@ -25,9 +25,9 @@ async def main() -> None:
 
 async def _seed(session: AsyncSession) -> None:
     users = SQLAlchemyUserRepository(session)
-    if not await users.get_by_email("admin@demo.local"):
+    if not await users.get_by_email("ok1@example.com"):
         await users.create(
-            email="admin@demo.local",
+            email="ok1@example.com",
             full_name="Admin Demo",
             hashed_password=hash_password("admin12345"),
         )

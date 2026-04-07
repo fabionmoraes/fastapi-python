@@ -64,6 +64,20 @@ Documentação interativa: [http://localhost:8000/docs](http://localhost:8000/do
 
 ### 7. Worker de filas (opcional, outro terminal)
 
+Com **Python 3.14**, o comando oficial `python -m arq ...` pode falhar com *“There is no current event loop”* (limitação do ARQ até corrigirem no pacote). Use o entrypoint do projeto:
+
+```bash
+python -m app.workers.cli
+```
+
+Ou, após `pip install -e .`:
+
+```bash
+arq-worker
+```
+
+Em versões mais antigas do Python, ainda funciona:
+
 ```bash
 python -m arq app.infrastructure.messaging.arq_settings.WorkerSettings
 ```
@@ -84,8 +98,11 @@ Processa jobs enfileirados no Redis (ex.: e-mail de boas-vindas após registro).
 | POST | `{API_PREFIX}/users` | Não | Criar usuário (alternativa ao register) |
 | GET/POST | `{API_PREFIX}/products` | GET/POST protegidos | Listar / criar produtos |
 | GET/POST | `{API_PREFIX}/clients` | Sim | Listar / criar clientes |
-| PUT | `{API_PREFIX}/products/{id}/embedding` | Sim | Salvar embedding (vetor 384 dim.) |
-| POST | `{API_PREFIX}/products/search/semantic` | Sim | Busca por similaridade de vetores |
+| GET | `{API_PREFIX}/products/{id}/embedding` | Sim | Ler embedding salvo (exemplo no `/docs`) |
+| POST | `{API_PREFIX}/products/{id}/embedding/generate` | Sim | Gerar embedding via **OpenAI** a partir do produto |
+| PUT | `{API_PREFIX}/products/{id}/embedding` | Sim | Salvar embedding manual (vetor 384 dim.) |
+| POST | `{API_PREFIX}/products/search/semantic/text` | Sim | Busca semântica por **texto** (OpenAI → vetor) |
+| POST | `{API_PREFIX}/products/search/semantic` | Sim | Busca por similaridade com vetor já calculado |
 
 `API_PREFIX` padrão: **`/api/v1`**.
 
@@ -156,19 +173,40 @@ curl -s "http://localhost:8000/api/v1/clients?limit=10" \
   -H "Authorization: Bearer TOKEN"
 ```
 
-### Busca semântica (exige vetor 384 dimensões)
+### Gerar embedding a partir do produto (OpenAI)
 
-O corpo deve conter `query_embedding` com **384** floats (mesma dimensão configurada em `app/core/constants.py` e usada em `PUT .../products/{id}/embedding`). Gere o vetor com o mesmo modelo que indexar os produtos. Envie o JSON via arquivo para não digitar o vetor no terminal:
+**OpenAPI** é o contrato/documentação em `/docs`. **OpenAI** é o serviço que calcula o vetor. Com `OPENAI_API_KEY` no `.env`, após criar o produto:
 
 ```bash
-# query.json → {"query_embedding": [<384 floats...>], "limit": 5}
+curl -s -X POST "http://localhost:8000/api/v1/products/UUID_DO_PRODUTO/embedding/generate" \
+  -H "Authorization: Bearer TOKEN"
+```
+
+A API monta um texto (nome, descrição, SKU, categoria), chama `text-embedding-3-small` com **384** dimensões e grava em `product_embeddings`. Sem chave, use o **PUT** `.../embedding` com vetor gerado por outra ferramenta.
+
+### Busca semântica por texto (OpenAI)
+
+Com `OPENAI_API_KEY` no `.env`, envie a consulta em linguagem natural (o backend gera o vetor com o mesmo modelo da indexação):
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/products/search/semantic/text \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"notebook para trabalho","limit":5}'
+```
+
+### Busca semântica com vetor pronto (384 dimensões)
+
+O corpo deve conter `query_embedding` com **384** floats (mesma dimensão que o PGVector). Útil se você calcula o vetor fora da API. Exemplo com arquivo:
+
+```bash
 curl -s -X POST http://localhost:8000/api/v1/products/search/semantic \
   -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d @query.json
 ```
 
-Ou use **Swagger** em `/docs` para testar com um array colado.
+(`query.json` → `{"query_embedding": [<384 floats...>], "limit": 5}`)
 
 ---
 
@@ -219,3 +257,4 @@ app/
 - **401 em rotas protegidas:** header `Authorization: Bearer <token>` ausente ou token expirado.
 - **Falha ao subir a API:** Redis inacessível (pool ARQ no startup) ou `DATABASE_URL` incorreto.
 - **Extensões no Postgres:** a migration cria `timescaledb` e `vector`; a imagem `timescale/timescaledb` já inclui **pgvector** na prática.
+- **Worker ARQ / `get_event_loop` no Python 3.14:** use `python -m app.workers.cli` ou `arq-worker` em vez de `python -m arq ...` (ver seção 7).

@@ -42,3 +42,6 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[project.scripts]
+arq-worker = "app.workers.cli:main"

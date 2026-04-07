@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Dimensão dos embeddings — manter alinhado a app.core.constants.DEFAULT_EMBEDDING_DIMENSIONS
     embedding_dimensions: int = 384
 
+    # Geração automática (POST .../embedding/generate) — opcional
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_embedding_model: str = "text-embedding-3-small"
+
 
 @lru_cache
 def get_settings() -> Settings:
