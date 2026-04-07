@@ -1,6 +1,4 @@
-from app.infrastructure.embeddings.openai_embeddings import (
-    EmbeddingProviderError,
-    embed_text_openai,
-)
+from app.infrastructure.embeddings.openai_embeddings import EmbeddingProviderError
+from app.infrastructure.embeddings.resolve import embed_text
 
-__all__ = ["embed_text_openai", "EmbeddingProviderError"]
+__all__ = ["embed_text", "EmbeddingProviderError"]

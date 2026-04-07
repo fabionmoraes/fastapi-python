@@ -98,10 +98,8 @@ Processa jobs enfileirados no Redis (ex.: e-mail de boas-vindas após registro).
 | POST | `{API_PREFIX}/users` | Não | Criar usuário (alternativa ao register) |
 | GET/POST | `{API_PREFIX}/products` | GET/POST protegidos | Listar / criar produtos |
 | GET/POST | `{API_PREFIX}/clients` | Sim | Listar / criar clientes |
-| GET | `{API_PREFIX}/products/{id}/embedding` | Sim | Ler embedding salvo (exemplo no `/docs`) |
-| POST | `{API_PREFIX}/products/{id}/embedding/generate` | Sim | Gerar embedding via **OpenAI** a partir do produto |
-| PUT | `{API_PREFIX}/products/{id}/embedding` | Sim | Salvar embedding manual (vetor 384 dim.) |
-| POST | `{API_PREFIX}/products/search/semantic/text` | Sim | Busca semântica por **texto** (OpenAI → vetor) |
+| PUT | `{API_PREFIX}/products/{id}/embedding` | Sim | Gerar embedding a partir do produto e gravar (dummy / local / OpenAI) |
+| POST | `{API_PREFIX}/products/search/semantic/text` | Sim | Busca semântica por **texto** (mesmo provedor) |
 | POST | `{API_PREFIX}/products/search/semantic` | Sim | Busca por similaridade com vetor já calculado |
 
 `API_PREFIX` padrão: **`/api/v1`**.
@@ -173,20 +171,30 @@ curl -s "http://localhost:8000/api/v1/clients?limit=10" \
   -H "Authorization: Bearer TOKEN"
 ```
 
-### Gerar embedding a partir do produto (OpenAI)
+### Embeddings (sem pagar API)
 
-**OpenAPI** é o contrato/documentação em `/docs`. **OpenAI** é o serviço que calcula o vetor. Com `OPENAI_API_KEY` no `.env`, após criar o produto:
+| `EMBEDDING_PROVIDER` | O que é |
+|----------------------|--------|
+| **`dummy`** (padrão) | Gera 384 números **determinísticos** a partir do texto (só biblioteca padrão). Ideal para **testar upsert** e PGVector; a “semântica” da busca não é real. |
+| **`local`** | **Sentence-Transformers** (`all-MiniLM-L6-v2`, 384 dim.). Instale: `pip install -e ".[local-embeddings]"` (baixa PyTorch na primeira vez). |
+| **`openai`** | API paga; defina `OPENAI_API_KEY`. |
+
+Em Python **3.14**, se `sentence-transformers`/PyTorch falhar, use **`dummy`** ou **OpenAI**.
+
+### Gerar e gravar embedding a partir do produto
+
+Após criar o produto, com JWT:
 
 ```bash
-curl -s -X POST "http://localhost:8000/api/v1/products/UUID_DO_PRODUTO/embedding/generate" \
+curl -s -X PUT "http://localhost:8000/api/v1/products/UUID_DO_PRODUTO/embedding" \
   -H "Authorization: Bearer TOKEN"
 ```
 
-A API monta um texto (nome, descrição, SKU, categoria), chama `text-embedding-3-small` com **384** dimensões e grava em `product_embeddings`. Sem chave, use o **PUT** `.../embedding` com vetor gerado por outra ferramenta.
+A API monta o texto (nome, descrição, SKU, categoria), gera o vetor e faz **upsert** em `product_embeddings`.
 
-### Busca semântica por texto (OpenAI)
+### Busca semântica por texto
 
-Com `OPENAI_API_KEY` no `.env`, envie a consulta em linguagem natural (o backend gera o vetor com o mesmo modelo da indexação):
+Envie a consulta em linguagem natural (o mesmo provedor usado na geração acima):
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/products/search/semantic/text \

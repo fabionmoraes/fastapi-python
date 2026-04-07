@@ -1,7 +1,10 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, PostgresDsn, RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.constants import DEFAULT_EMBEDDING_DIMENSIONS
 
 
 class Settings(BaseSettings):
@@ -28,10 +31,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     metrics_enabled: bool = True
 
-    # Dimensão dos embeddings — manter alinhado a app.core.constants.DEFAULT_EMBEDDING_DIMENSIONS
-    embedding_dimensions: int = 384
+    embedding_dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS
 
-    # Geração automática (POST .../embedding/generate) — opcional
+    # dummy: teste PGVector. local: Sentence-Transformers. openai: API paga.
+    embedding_provider: Literal["dummy", "local", "openai"] = "dummy"
+    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_embedding_model: str = "text-embedding-3-small"

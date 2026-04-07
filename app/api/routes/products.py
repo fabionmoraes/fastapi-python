@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.core.constants import DEFAULT_EMBEDDING_DIMENSIONS
 from app.domain.entities import User
-from app.infrastructure.embeddings import EmbeddingProviderError, embed_text_openai
+from app.infrastructure.embeddings import EmbeddingProviderError, embed_text
 from app.infrastructure.embeddings.product_text import build_index_text
 from app.infrastructure.repositories import (
     ProductEmbeddingRepository,
@@ -17,6 +17,52 @@ from app.infrastructure.repositories import (
 from app.schemas.product import ProductCreate, ProductEmbeddingRead, ProductRead
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+async def _generate_and_persist_embedding(
+    session: AsyncSession,
+    product_id: UUID,
+) -> ProductEmbeddingRead:
+    products = SQLAlchemyProductRepository(session)
+    p = await products.get_by_id(product_id)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+
+    source = build_index_text(
+        name=p.name,
+        description=p.description,
+        sku=p.sku,
+        category=p.category,
+    )
+    try:
+        vector = await embed_text(source)
+    except EmbeddingProviderError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        ) from e
+
+    emb = ProductEmbeddingRepository(session)
+    await emb.upsert_embedding(
+        product_id=product_id,
+        embedding=vector,
+        source_text=source,
+    )
+    await session.commit()
+
+    row = await emb.get_by_product_id(product_id)
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="embedding not persisted",
+        )
+    return ProductEmbeddingRead(
+        id=row.id,
+        product_id=row.product_id,
+        embedding=list(row.embedding),
+        source_text=row.source_text,
+        created_at=row.created_at,
+    )
 
 
 @router.get("", response_model=list[ProductRead])
@@ -71,114 +117,22 @@ async def create_product(
     )
 
 
-@router.post(
-    "/{product_id}/embedding/generate",
+@router.put(
+    "/{product_id}/embedding",
     response_model=ProductEmbeddingRead,
-    summary="Gerar embedding a partir do produto (OpenAI)",
+    summary="Gerar e gravar embedding",
     description=(
-        "Monta um texto com nome, descrição, SKU e categoria, chama a API de embeddings da "
-        "**OpenAI** (não é o OpenAPI/Swagger) e grava o vetor em `product_embeddings`. "
-        "Requer `OPENAI_API_KEY` no ambiente."
+        "Monta texto a partir do produto (nome, descrição, SKU, categoria), gera o vetor com o "
+        "provedor configurado (`EMBEDDING_PROVIDER`: **dummy**, **local** ou **openai**) e faz "
+        "upsert em `product_embeddings`. Não envie vetor no JSON; o corpo é opcional/vazio."
     ),
 )
-async def generate_product_embedding(
-    product_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
-) -> ProductEmbeddingRead:
-    products = SQLAlchemyProductRepository(session)
-    p = await products.get_by_id(product_id)
-    if not p:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
-
-    source = build_index_text(
-        name=p.name,
-        description=p.description,
-        sku=p.sku,
-        category=p.category,
-    )
-    try:
-        vector = await embed_text_openai(source)
-    except EmbeddingProviderError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(e),
-        ) from e
-
-    emb = ProductEmbeddingRepository(session)
-    await emb.upsert_embedding(
-        product_id=product_id,
-        embedding=vector,
-        source_text=source,
-    )
-    await session.commit()
-
-    row = await emb.get_by_product_id(product_id)
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="embedding not persisted",
-        )
-    return ProductEmbeddingRead(
-        id=row.id,
-        product_id=row.product_id,
-        embedding=list(row.embedding),
-        source_text=row.source_text,
-        created_at=row.created_at,
-    )
-
-
-class EmbeddingUpsertBody(BaseModel):
-    embedding: list[float] = Field(
-        min_length=DEFAULT_EMBEDDING_DIMENSIONS,
-        max_length=DEFAULT_EMBEDDING_DIMENSIONS,
-    )
-    source_text: str | None = None
-
-
-@router.get("/{product_id}/embedding", response_model=ProductEmbeddingRead)
-async def get_product_embedding(
-    product_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
-) -> ProductEmbeddingRead:
-    """Retorna o vetor salvo em `product_embeddings` (exemplo de resposta no OpenAPI /docs)."""
-    products = SQLAlchemyProductRepository(session)
-    if not await products.get_by_id(product_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
-    emb = ProductEmbeddingRepository(session)
-    row = await emb.get_by_product_id(product_id)
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="embedding not found for this product",
-        )
-    return ProductEmbeddingRead(
-        id=row.id,
-        product_id=row.product_id,
-        embedding=list(row.embedding),
-        source_text=row.source_text,
-        created_at=row.created_at,
-    )
-
-
-@router.put("/{product_id}/embedding", status_code=status.HTTP_204_NO_CONTENT)
 async def upsert_product_embedding(
     product_id: UUID,
-    body: EmbeddingUpsertBody,
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
-) -> None:
-    products = SQLAlchemyProductRepository(session)
-    if not await products.get_by_id(product_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
-    emb = ProductEmbeddingRepository(session)
-    await emb.upsert_embedding(
-        product_id=product_id,
-        embedding=body.embedding,
-        source_text=body.source_text,
-    )
-    await session.commit()
+) -> ProductEmbeddingRead:
+    return await _generate_and_persist_embedding(session, product_id)
 
 
 class SemanticSearchBody(BaseModel):
@@ -206,10 +160,10 @@ def _semantic_hits(rows: list[tuple[UUID, str, float]]) -> list[dict[str, str | 
 
 @router.post(
     "/search/semantic/text",
-    summary="Busca semântica por texto (OpenAI)",
+    summary="Busca semântica por texto",
     description=(
-        "Converte `query` em embedding (mesma API/modelo que em `/embedding/generate`) e "
-        "executa a busca por similaridade no PGVector. Requer `OPENAI_API_KEY`."
+        "Converte `query` em embedding com o mesmo provedor de `PUT .../products/{id}/embedding` "
+        "(local ou OpenAI) e busca por similaridade no PGVector."
     ),
 )
 async def semantic_search_by_text(
@@ -218,7 +172,7 @@ async def semantic_search_by_text(
     _: Annotated[User, Depends(get_current_user)],
 ) -> list[dict]:
     try:
-        vector = await embed_text_openai(body.query.strip())
+        vector = await embed_text(body.query.strip())
     except EmbeddingProviderError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
