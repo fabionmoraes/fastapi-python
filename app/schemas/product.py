@@ -35,6 +35,18 @@ class ProductCreate(BaseModel):
     category: str | None = None
 
 
+class ProductMetricRead(BaseModel):
+    """Um bucket (janela de tempo) na série `product_metrics`."""
+
+    bucket: datetime
+    product_id: UUID
+    views: int
+    revenue: Decimal
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ProductEmbeddingRead(BaseModel):
     """Embedding persistido (PGVector). O exemplo no Swagger ilustra o formato da resposta."""
 

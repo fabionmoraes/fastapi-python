@@ -1,3 +1,5 @@
+from datetime import datetime
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -12,9 +14,15 @@ from app.infrastructure.embeddings import EmbeddingProviderError, embed_text
 from app.infrastructure.embeddings.product_text import build_index_text
 from app.infrastructure.repositories import (
     ProductEmbeddingRepository,
+    ProductMetricRepository,
     SQLAlchemyProductRepository,
 )
-from app.schemas.product import ProductCreate, ProductEmbeddingRead, ProductRead
+from app.schemas.product import (
+    ProductCreate,
+    ProductEmbeddingRead,
+    ProductMetricRead,
+    ProductRead,
+)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -133,6 +141,97 @@ async def upsert_product_embedding(
     _: Annotated[User, Depends(get_current_user)],
 ) -> ProductEmbeddingRead:
     return await _generate_and_persist_embedding(session, product_id)
+
+
+class ProductMetricBody(BaseModel):
+    """Incrementa `views` e `revenue` no bucket; se já existir linha, soma (upsert)."""
+
+    bucket: datetime = Field(
+        description="Início do intervalo agregado (ex.: meia-noite UTC do dia).",
+    )
+    views: int = Field(0, ge=0)
+    revenue: Decimal = Field(default_factory=lambda: Decimal("0"), ge=0)
+
+
+@router.get(
+    "/{product_id}/metrics",
+    response_model=list[ProductMetricRead],
+    summary="Listar métricas por intervalo de buckets",
+)
+async def list_product_metrics(
+    product_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+    from_bucket: datetime = Query(
+        ...,
+        alias="from",
+        description="Início do intervalo de consulta (inclusivo).",
+    ),
+    to_bucket: datetime = Query(
+        ...,
+        alias="to",
+        description="Fim do intervalo de consulta (inclusivo).",
+    ),
+) -> list[ProductMetricRead]:
+    products = SQLAlchemyProductRepository(session)
+    if not await products.get_by_id(product_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+    repo = ProductMetricRepository(session)
+    rows = await repo.list_for_product(
+        product_id, from_bucket=from_bucket, to_bucket=to_bucket
+    )
+    return [
+        ProductMetricRead(
+            bucket=r.bucket,
+            product_id=r.product_id,
+            views=r.views,
+            revenue=r.revenue,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post(
+    "/{product_id}/metrics",
+    response_model=ProductMetricRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar métricas em um bucket (somatório)",
+    description=(
+        "Grava em `product_metrics` (Timescale). Mesmo `(bucket, product_id)` de novo: soma "
+        "`views` e `revenue` à linha existente."
+    ),
+)
+async def append_product_metrics(
+    product_id: UUID,
+    body: ProductMetricBody,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> ProductMetricRead:
+    products = SQLAlchemyProductRepository(session)
+    if not await products.get_by_id(product_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+    repo = ProductMetricRepository(session)
+    await repo.upsert_add(
+        product_id=product_id,
+        bucket=body.bucket,
+        views_delta=body.views,
+        revenue_delta=body.revenue,
+    )
+    await session.commit()
+    row = await repo.get_bucket(product_id, body.bucket)
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="metric row not found after upsert",
+        )
+    return ProductMetricRead(
+        bucket=row.bucket,
+        product_id=row.product_id,
+        views=row.views,
+        revenue=row.revenue,
+        created_at=row.created_at,
+    )
 
 
 class SemanticSearchBody(BaseModel):

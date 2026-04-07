@@ -1,6 +1,7 @@
 """Dados de exemplo (executar com DATABASE_URL no ambiente)."""
 
 import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from app.core.security import hash_password
 from app.infrastructure.database.models import ClientModel, ProductModel
 from app.infrastructure.database.session import AsyncSessionLocal
 from app.infrastructure.repositories import (
+    ProductMetricRepository,
     SQLAlchemyClientRepository,
     SQLAlchemyProductRepository,
     SQLAlchemyUserRepository,
@@ -37,13 +39,26 @@ async def _seed(session: AsyncSession) -> None:
         select(ProductModel.sku).where(ProductModel.sku == "SKU-DEMO-001")
     )
     if existing_sku.scalar_one_or_none() is None:
-        await products.create(
+        p = await products.create(
             name="Notebook Pro 14",
             description="Ultrabook para produtividade e desenvolvimento.",
             sku="SKU-DEMO-001",
             price=Decimal("8999.90"),
             stock_quantity=42,
             category="eletrônicos",
+        )
+        metrics = ProductMetricRepository(session)
+        await metrics.upsert_add(
+            product_id=p.id,
+            bucket=datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+            views_delta=150,
+            revenue_delta=Decimal("45000.00"),
+        )
+        await metrics.upsert_add(
+            product_id=p.id,
+            bucket=datetime(2026, 4, 2, 0, 0, tzinfo=UTC),
+            views_delta=88,
+            revenue_delta=Decimal("22000.00"),
         )
 
     clients = SQLAlchemyClientRepository(session)
