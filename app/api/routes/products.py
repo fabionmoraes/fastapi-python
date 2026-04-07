@@ -8,10 +8,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
-from app.core.constants import DEFAULT_EMBEDDING_DIMENSIONS
-from app.domain.entities import User
-from app.infrastructure.embeddings import EmbeddingProviderError, embed_text
+from app.core.config import get_settings
+from app.core.constants import _GEMINI_DESCRIPTION_SYSTEM, DEFAULT_EMBEDDING_DIMENSIONS
+from app.domain.entities import Product, User
+from app.infrastructure.embeddings import (
+    EmbeddingProviderError,
+    GeminiRateLimitError,
+    embed_text,
+)
 from app.infrastructure.embeddings.product_text import build_index_text
+from app.infrastructure.gemini import GeminiTextError, gemini_generate_text
 from app.infrastructure.repositories import (
     ProductEmbeddingRepository,
     ProductMetricRepository,
@@ -19,12 +25,26 @@ from app.infrastructure.repositories import (
 )
 from app.schemas.product import (
     ProductCreate,
+    ProductDescriptionSuggestBody,
+    ProductDescriptionSuggestionRead,
     ProductEmbeddingRead,
     ProductMetricRead,
     ProductRead,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+def _http_429_gemini(e: GeminiRateLimitError) -> HTTPException:
+    kw: dict = {
+        "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
+        "detail": str(e),
+    }
+    if e.retry_after_seconds is not None:
+        kw["headers"] = {
+            "Retry-After": str(max(1, int(e.retry_after_seconds) + 1)),
+        }
+    return HTTPException(**kw)
 
 
 async def _generate_and_persist_embedding(
@@ -44,6 +64,8 @@ async def _generate_and_persist_embedding(
     )
     try:
         vector = await embed_text(source)
+    except GeminiRateLimitError as e:
+        raise _http_429_gemini(e) from e
     except EmbeddingProviderError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -124,6 +146,67 @@ async def create_product(
         created_at=p.created_at,
     )
 
+def _product_description_prompt(p: Product, body: ProductDescriptionSuggestBody) -> str:
+    lines = [
+        "Com base nos dados abaixo, escreva uma descrição comercial atrativa.",
+        f"- Nome: {p.name}",
+        f"- SKU: {p.sku}",
+        f"- Categoria: {p.category or '(não informada)'}",
+        f"- Preço: {p.price}",
+        f"- Estoque disponível: {p.stock_quantity}",
+        f"- Descrição atual (pode estar vazia): {p.description or '(vazia)'}",
+    ]
+    if body.extra_context and body.extra_context.strip():
+        lines.append(f"- Instruções ou contexto extra: {body.extra_context.strip()}")
+    if body.tone and body.tone.strip():
+        lines.append(f"- Tom desejado: {body.tone.strip()}")
+    return "\n".join(lines)
+
+
+@router.post(
+    "/{product_id}/suggestions/description",
+    response_model=ProductDescriptionSuggestionRead,
+    summary="Sugerir descrição com Gemini",
+    description=(
+        "Usa o modelo configurado em `GEMINI_TEXT_MODEL` (ex.: `gemini-2.5-flash`) com os dados "
+        "do produto. Requer `GEMINI_API_KEY`. A resposta não altera o produto no banco — copie ou "
+        "atualize via seu fluxo de edição."
+    ),
+)
+async def suggest_product_description(
+    product_id: UUID,
+    body: ProductDescriptionSuggestBody,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> ProductDescriptionSuggestionRead:
+    products = SQLAlchemyProductRepository(session)
+    p = await products.get_by_id(product_id)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
+    settings = get_settings()
+    prompt = _product_description_prompt(p, body)
+    try:
+        text = await gemini_generate_text(
+            user_prompt=prompt,
+            system_instruction=_GEMINI_DESCRIPTION_SYSTEM,
+        )
+    except GeminiRateLimitError as e:
+        raise _http_429_gemini(e) from e
+    except EmbeddingProviderError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        ) from e
+    except GeminiTextError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        ) from e
+    return ProductDescriptionSuggestionRead(
+        suggested_description=text,
+        model=settings.gemini_text_model,
+    )
+
 
 @router.put(
     "/{product_id}/embedding",
@@ -131,7 +214,8 @@ async def create_product(
     summary="Gerar e gravar embedding",
     description=(
         "Monta texto a partir do produto (nome, descrição, SKU, categoria), gera o vetor com o "
-        "provedor configurado (`EMBEDDING_PROVIDER`: **dummy**, **local** ou **openai**) e faz "
+        "provedor configurado (`EMBEDDING_PROVIDER`: **dummy**, **local**, **openai** ou "
+        "**gemini**) e faz "
         "upsert em `product_embeddings`. Não envie vetor no JSON; o corpo é opcional/vazio."
     ),
 )
@@ -262,7 +346,7 @@ def _semantic_hits(rows: list[tuple[UUID, str, float]]) -> list[dict[str, str | 
     summary="Busca semântica por texto",
     description=(
         "Converte `query` em embedding com o mesmo provedor de `PUT .../products/{id}/embedding` "
-        "(local ou OpenAI) e busca por similaridade no PGVector."
+        "(dummy, local, OpenAI ou Gemini) e busca por similaridade no PGVector."
     ),
 )
 async def semantic_search_by_text(
@@ -272,6 +356,8 @@ async def semantic_search_by_text(
 ) -> list[dict]:
     try:
         vector = await embed_text(body.query.strip())
+    except GeminiRateLimitError as e:
+        raise _http_429_gemini(e) from e
     except EmbeddingProviderError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

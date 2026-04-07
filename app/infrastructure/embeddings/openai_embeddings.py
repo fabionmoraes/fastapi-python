@@ -3,10 +3,7 @@
 import httpx
 
 from app.core.config import get_settings
-
-
-class EmbeddingProviderError(Exception):
-    """Config ausente ou resposta inválida do provedor."""
+from app.infrastructure.embeddings.errors import EmbeddingProviderError
 
 
 async def embed_text_openai(text: str) -> list[float]:

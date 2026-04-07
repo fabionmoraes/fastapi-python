@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from app.core.config import get_settings
-from app.infrastructure.embeddings.openai_embeddings import EmbeddingProviderError
+from app.infrastructure.embeddings.errors import EmbeddingProviderError
 
 _model: Any = None
 

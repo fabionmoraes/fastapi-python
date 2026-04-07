@@ -35,6 +35,18 @@ class ProductCreate(BaseModel):
     category: str | None = None
 
 
+class ProductDescriptionSuggestBody(BaseModel):
+    """Opcional: refine a sugestão (tom, público, palavras-chave, etc.)."""
+
+    extra_context: str | None = Field(None, max_length=4000)
+    tone: str | None = Field(None, max_length=128, description="Ex.: técnico, informal, luxo")
+
+
+class ProductDescriptionSuggestionRead(BaseModel):
+    suggested_description: str
+    model: str
+
+
 class ProductMetricRead(BaseModel):
     """Um bucket (janela de tempo) na série `product_metrics`."""
 

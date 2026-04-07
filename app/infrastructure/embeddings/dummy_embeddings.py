@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from app.core.config import get_settings
-from app.infrastructure.embeddings.openai_embeddings import EmbeddingProviderError
+from app.infrastructure.embeddings.errors import EmbeddingProviderError
 
 
 def embed_text_dummy(text: str) -> list[float]:

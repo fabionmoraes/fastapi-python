@@ -33,13 +33,19 @@ class Settings(BaseSettings):
 
     embedding_dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS
 
-    # dummy: teste PGVector. local: Sentence-Transformers. openai: API paga.
-    embedding_provider: Literal["dummy", "local", "openai"] = "dummy"
+    # dummy: teste PGVector. local: Sentence-Transformers. openai / gemini: APIs.
+    embedding_provider: Literal["dummy", "local", "openai", "gemini"] = "dummy"
     local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_embedding_model: str = "text-embedding-3-small"
+
+    # Google AI Studio / Gemini API (https://aistudio.google.com/apikey)
+    gemini_api_key: str | None = None
+    gemini_embedding_model: str = "gemini-embedding-001"
+    # Modelo estável para generateContent (ver docs; 1.5-flash foi descontinuado no v1beta).
+    gemini_text_model: str = "gemini-2.5-flash"
 
 
 @lru_cache
